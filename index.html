@@ -1,0 +1,148 @@
+<!DOCTYPE html><html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Neon Dodge</title>
+<style>
+:root{--accent:#00ff00}
+html,body{margin:0;padding:0;overflow:hidden;background:#000;font-family:monospace;color:var(--accent)}
+button,select{background:#000;border:2px solid var(--accent);color:var(--accent);padding:14px 26px;font-size:18px}
+#menu,#gameover{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:rgba(0,0,0,.95);z-index:10}
+#gameover{display:none}
+#hud{position:fixed;top:8px;left:8px;z-index:5}
+#bossHud{position:fixed;top:0;left:0;width:100%;height:16px;display:none;border-bottom:2px solid var(--accent);z-index:6}
+#bossBar{height:100%;background:var(--accent);width:100%}
+</style>
+</head>
+<body><div id="menu">
+  <h1>NEON DODGE</h1>
+  <label>Сложность</label>
+  <select id="difficulty">
+    <option value="easy">Лёгкая</option>
+    <option value="normal" selected>Нормальная</option>
+    <option value="hard">Сложная</option>
+  </select>
+  <button id="play">▶ Играть</button>
+</div><div id="gameover">
+  <h1>GAME OVER</h1>
+  <button id="restart">Заново</button>
+</div><div id="hud">Очки: <span id="score">0</span></div>
+<div id="bossHud"><div id="bossBar"></div></div><script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script><script>
+/************* AUDIO *************/
+const musicList=[
+ 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+ 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+ 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3'
+];
+const bossTrack='https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3';
+const deathSound=new Audio('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3');
+deathSound.volume=0.6;
+let bgMusic,bossMusic;
+
+function pickMusic(){bgMusic=new Audio(musicList[Math.floor(Math.random()*musicList.length)]);bgMusic.loop=true;bgMusic.volume=0.4}
+function playMusic(){if(!bgMusic)pickMusic();bgMusic.play().catch(()=>{})}
+function stopMusic(){if(bgMusic)bgMusic.pause()}
+function playBossMusic(){stopMusic();bossMusic=new Audio(bossTrack);bossMusic.loop=true;bossMusic.volume=0.6;bossMusic.play().catch(()=>{})}
+function stopBossMusic(){if(bossMusic)bossMusic.pause()}
+
+/************* GAME *************/
+const PALETTE=[0x00ff00,0xff00ff,0x00ffff,0xffff00,0xff6600];
+const accent=PALETTE[Math.floor(Math.random()*PALETTE.length)];
+document.documentElement.style.setProperty('--accent','#'+accent.toString(16));
+
+const menu=document.getElementById('menu');
+const gameover=document.getElementById('gameover');
+const playBtn=document.getElementById('play');
+const restartBtn=document.getElementById('restart');
+const difficulty=document.getElementById('difficulty');
+const scoreEl=document.getElementById('score');
+const bossHud=document.getElementById('bossHud');
+const bossBar=document.getElementById('bossBar');
+
+let running=false,score=0;
+let enemies=[],projectiles=[];
+let spawnRate=800,speedBase=0.12;
+let bossActive=false,bossTime=0,boss;
+const bossDuration=10;
+
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.1,100);
+camera.position.set(0,7,12);camera.lookAt(0,0,0);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);document.body.appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff,0.6));
+const dl=new THREE.DirectionalLight(0xffffff,0.8);dl.position.set(5,10,5);scene.add(dl);
+scene.add(new THREE.GridHelper(50,25,accent,accent));
+
+let player;
+function createPlayer(){if(player)scene.remove(player);
+ const shapes=[
+  new THREE.BoxGeometry(1,1,1),
+  new THREE.SphereGeometry(0.6,16,16),
+  new THREE.ConeGeometry(0.6,1.2,12)
+ ];
+ player=new THREE.Mesh(shapes[Math.floor(Math.random()*shapes.length)],new THREE.MeshStandardMaterial({color:accent,emissive:accent,emissiveIntensity:1}));
+ player.position.y=0.6;scene.add(player);
+}
+createPlayer();
+
+const enemyTypes=[
+ {geo:new THREE.BoxGeometry(0.8,0.8,0.8),color:0xff0044,speed:1},
+ {geo:new THREE.SphereGeometry(0.5,16,16),color:0x00ffff,speed:1.4},
+ {geo:new THREE.ConeGeometry(0.5,1,12),color:0xffff00,speed:1.8},
+ {geo:new THREE.TetrahedronGeometry(0.6),color:0xff8800,speed:2.2}
+];
+
+function spawnEnemy(){if(!running||bossActive)return;
+ const t=enemyTypes[Math.floor(Math.random()*enemyTypes.length)];
+ const e=new THREE.Mesh(t.geo,new THREE.MeshStandardMaterial({color:t.color}));
+ e.position.set((Math.random()-0.5)*8,8,0);
+ e.userData={speed:speedBase*t.speed};
+ scene.add(e);enemies.push(e);
+}
+
+function startBoss(){bossActive=true;bossTime=bossDuration;bossHud.style.display='block';bossBar.style.width='100%';playBossMusic();
+ boss=new THREE.Mesh(new THREE.TorusKnotGeometry(1.8,0.6,64,12),new THREE.MeshStandardMaterial({color:0xff0000,emissive:0xff0000,emissiveIntensity:1}));
+ boss.position.set(0,5,0);scene.add(boss);
+}
+
+function spawnBossProjectile(){if(!bossActive)return;
+ const g=new THREE.DodecahedronGeometry(0.4);
+ const p=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:0xff0000}));
+ p.position.copy(boss.position);
+ p.userData={speed:0.25};scene.add(p);projectiles.push(p);
+}
+
+let touchX=0;
+addEventListener('touchstart',e=>touchX=e.touches[0].clientX);
+addEventListener('touchmove',e=>{if(!running)return;const dx=e.touches[0].clientX-touchX;player.position.x+=dx*0.01;touchX=e.touches[0].clientX;});
+
+function startGame(){pickMusic();playMusic();
+ enemies.forEach(e=>scene.remove(e));projectiles.forEach(p=>scene.remove(p));enemies=[];projectiles=[];
+ createPlayer();score=0;scoreEl.textContent=0;bossActive=false;bossHud.style.display='none';if(boss){scene.remove(boss);boss=null}
+ const d=difficulty.value;if(d==='easy'){spawnRate=1200;speedBase=0.1}if(d==='normal'){spawnRate=800;speedBase=0.12}if(d==='hard'){spawnRate=400;speedBase=0.18}
+ menu.style.display='none';gameover.style.display='none';running=true;
+ clearInterval(spawnTimer);clearInterval(scoreTimer);clearInterval(bossShootTimer);
+ spawnTimer=setInterval(spawnEnemy,spawnRate);
+ scoreTimer=setInterval(()=>{if(!running)return;score++;scoreEl.textContent=score;if(score%20===0&&!bossActive)startBoss();},1000);
+ bossShootTimer=setInterval(spawnBossProjectile,700);
+}
+
+let spawnTimer,scoreTimer,bossShootTimer;
+
+function endGame(){if(!running)return;running=false;deathSound.play().catch(()=>{});stopMusic();stopBossMusic();clearInterval(spawnTimer);clearInterval(scoreTimer);clearInterval(bossShootTimer);gameover.style.display='flex'}
+
+function loop(){requestAnimationFrame(loop);
+ if(player)player.rotation.y+=0.02;
+ enemies.forEach((e,i)=>{e.position.y-=e.userData.speed;if(Math.abs(e.position.x-player.position.x)<0.6&&e.position.y<1)endGame();if(e.position.y<-2){scene.remove(e);enemies.splice(i,1)}});
+ projectiles.forEach((p,i)=>{p.position.y-=p.userData.speed;if(Math.abs(p.position.x-player.position.x)<0.7&&p.position.y<1)endGame();if(p.position.y<-2){scene.remove(p);projectiles.splice(i,1)}});
+ if(bossActive&&boss){boss.rotation.x+=0.01;boss.rotation.y+=0.02;bossTime-=0.016;bossBar.style.width=(bossTime/bossDuration*100)+'%';if(bossTime<=0){bossActive=false;bossHud.style.display='none';scene.remove(boss);boss=null;stopBossMusic();playMusic();}}
+ player.position.x=Math.max(-4,Math.min(4,player.position.x));
+ renderer.render(scene,camera);
+}
+loop();
+
+playBtn.onclick=startGame;restartBtn.onclick=startGame;
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)})
+</script></body>
+</html>
